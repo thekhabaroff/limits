@@ -15,8 +15,8 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-NOFILE=65536
-NPROC=32768
+NOFILE=1048576   # 1M файловых дескрипторов на процесс
+NPROC=131072     # 128K потоков/процессов на пользователя
 MARKER="# CUSTOM RESOURCE LIMITS"
 
 echo -e "${CYAN}Настройка глобальных лимитов ресурсов...${NC}"
@@ -24,7 +24,6 @@ echo ""
 
 # ============================================================
 # 1. /etc/security/limits.conf
-# Применяется к SSH-сессиям и PAM-логинам
 # ============================================================
 if grep -q "$MARKER" /etc/security/limits.conf 2>/dev/null; then
     sed -i "/$MARKER/,/# END CUSTOM RESOURCE LIMITS/d" /etc/security/limits.conf
@@ -45,7 +44,7 @@ EOF
 echo -e "${GREEN}✓ /etc/security/limits.conf обновлён.${NC}"
 
 # ============================================================
-# 2. pam_limits.so — активирует limits.conf при SSH-входе
+# 2. pam_limits.so
 # ============================================================
 if ! grep -q "pam_limits.so" /etc/pam.d/common-session 2>/dev/null; then
     echo "session required pam_limits.so" >> /etc/pam.d/common-session
@@ -55,8 +54,7 @@ else
 fi
 
 # ============================================================
-# 3. systemd — лимиты для всех сервисов (nginx, docker и т.д.)
-# limits.conf не применяется к юнитам systemd!
+# 3. systemd
 # ============================================================
 mkdir -p /etc/systemd/system.conf.d/
 cat > /etc/systemd/system.conf.d/limits.conf << EOF
@@ -66,24 +64,23 @@ DefaultLimitNPROC=$NPROC
 EOF
 echo -e "${GREEN}✓ systemd DefaultLimitNOFILE=$NOFILE, DefaultLimitNPROC=$NPROC.${NC}"
 
-# Применяем немедленно без перезагрузки
 systemctl daemon-reexec
 echo -e "${GREEN}✓ systemd daemon-reexec выполнен.${NC}"
 
 # ============================================================
-# 4. sysctl — максимум открытых файлов на уровне ядра
-# Это глобальный потолок для всей системы
+# 4. sysctl — потолок ядра
+# fs.file-max должен быть >> NOFILE * кол-во процессов
 # ============================================================
 SYSCTL_CONF="/etc/sysctl.d/99-limits.conf"
 cat > "$SYSCTL_CONF" << EOF
-# Максимум открытых файловых дескрипторов для всей системы
-fs.file-max = 2097152
-# Максимум inotify-вотчеров (нужно Docker, IDE, файловым системам)
-fs.inotify.max_user_watches = 524288
-fs.inotify.max_user_instances = 512
+# Глобальный потолок файловых дескрипторов (должен быть >> NOFILE)
+fs.file-max = 12582912
+# inotify — для Docker, IDE, Webpack, Vite и т.д.
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_user_instances = 1024
 EOF
 sysctl -p "$SYSCTL_CONF" > /dev/null 2>&1
-echo -e "${GREEN}✓ sysctl: fs.file-max=2097152, inotify обновлён.${NC}"
+echo -e "${GREEN}✓ sysctl: fs.file-max=12582912, inotify обновлён.${NC}"
 
 # ============================================================
 # Проверка текущего состояния
